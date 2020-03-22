@@ -8,15 +8,131 @@
 #include <linux/if_packet.h>
 #include <net/if.h>
 
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
+#include <ctype.h>
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(*(x)))
+
+#define ETHERTYPE(x) { #x, ETH_P_##x }
+static const struct {
+	const char *name;
+	uint16_t value;
+} ethertypes[] = {
+	ETHERTYPE(LOOP),
+	ETHERTYPE(PUP),
+	ETHERTYPE(PUPAT),
+	ETHERTYPE(IP),
+	ETHERTYPE(X25),
+	ETHERTYPE(ARP),
+	ETHERTYPE(BPQ),
+	ETHERTYPE(IEEEPUP),
+	ETHERTYPE(IEEEPUPAT),
+	ETHERTYPE(DEC),
+	ETHERTYPE(DNA_DL),
+	ETHERTYPE(DNA_RC),
+	ETHERTYPE(DNA_RT),
+	ETHERTYPE(LAT),
+	ETHERTYPE(DIAG),
+	ETHERTYPE(CUST),
+	ETHERTYPE(SCA),
+	ETHERTYPE(TEB),
+	ETHERTYPE(RARP),
+	ETHERTYPE(ATALK),
+	ETHERTYPE(AARP),
+	ETHERTYPE(8021Q),
+	ETHERTYPE(8021AD),
+	ETHERTYPE(IPX),
+	ETHERTYPE(IPV6),
+	ETHERTYPE(PAUSE),
+	ETHERTYPE(SLOW),
+	ETHERTYPE(WCCP),
+	ETHERTYPE(PPP_DISC),
+	ETHERTYPE(PPP_SES),
+	ETHERTYPE(MPLS_UC),
+	ETHERTYPE(MPLS_MC),
+	ETHERTYPE(ATMMPOA),
+	ETHERTYPE(ATMFATE),
+	ETHERTYPE(PAE),
+	ETHERTYPE(AOE),
+	ETHERTYPE(TIPC),
+	ETHERTYPE(1588),
+	ETHERTYPE(FCOE),
+	ETHERTYPE(FIP),
+	ETHERTYPE(EDSA),
+	ETHERTYPE(802_3),
+	ETHERTYPE(AX25),
+	ETHERTYPE(ALL),
+	ETHERTYPE(802_2),
+	ETHERTYPE(SNAP),
+	ETHERTYPE(DDCMP),
+	ETHERTYPE(WAN_PPP),
+	ETHERTYPE(PPP_MP),
+	ETHERTYPE(LOCALTALK),
+	ETHERTYPE(CAN),
+	ETHERTYPE(PPPTALK),
+	ETHERTYPE(TR_802_2),
+	ETHERTYPE(MOBITEX),
+	ETHERTYPE(CONTROL),
+	ETHERTYPE(IRDA),
+	ETHERTYPE(ECONET),
+	ETHERTYPE(HDLC),
+	ETHERTYPE(ARCNET),
+	ETHERTYPE(DSA),
+	ETHERTYPE(TRAILER),
+	ETHERTYPE(PHONET),
+	ETHERTYPE(IEEE802154),
+};
+static int ethertype_eq(const char *a, const char *b)
+{
+	unsigned int i = 0;
+
+	if (strlen(a) != strlen(b))
+		return 0;
+
+	for (i = 0; i < strlen(a); ++i)
+		if (tolower(a[i]) != tolower(b[i]))
+			return 0;
+
+	return 1;
+}
+static int ethertype_get(const char *ethertype)
+{
+	unsigned int i = 0;
+
+	for (i = 0; i < ARRAY_SIZE(ethertypes); ++i)
+		if (ethertype_eq(ethertypes[i].name, ethertype))
+                  return ethertypes[i].value;
+
+        return -1;
+}
+
+static void random_mac_addr(unsigned char *octet)
+{
+	unsigned int i = 0;
+
+	for (i = 0; i < ETHER_ADDR_LEN; ++i)
+		octet[i] = rand() % 250 + 10;
+}
 
 struct traffic_def {
 	struct ethhdr ethhdr;
 	int ifindex;
 };
+
+static void traffic_def_init(struct traffic_def *self)
+{
+	memset(self, 0, sizeof *self);
+
+	random_mac_addr(self->ethhdr.h_dest);
+	random_mac_addr(self->ethhdr.h_source);
+}
+
+static void traffic_def_exit(struct traffic_def *self)
+{
+}
 
 struct generator {
 	int fd;
@@ -131,13 +247,14 @@ static int cmd_eth(struct traffic_def *def, struct args *args)
 			continue;
 		}
 		if (strcmp(arg, "type") == 0) {
-			unsigned int type;
+			int type;
 
 			arg = args_shift(args);
 			if (!arg)
 				break;
 
-			if (1 != sscanf(arg, "%X", &type)) {
+			type = ethertype_get(arg);
+			if (type <= 0) {
 				fprintf(stderr, "ruch: err: invalid type\n");
 				return 1;
 			}
@@ -204,6 +321,8 @@ int main(int argc, const char *const *argv)
 
 	printf("ruch: info: generator initialized\n");
 
+	traffic_def_init(&def);
+
 	args_init(&args, argc, argv);
 
 	cmd = args_shift(&args);
@@ -224,11 +343,11 @@ nextcmd:
 		break;
 	}
 
-
-	printf("ruch: info: sending traffic...\n");
+	printf("ruch: info: firing traffic...\n");
 	generator_send(&generator, &def);
 
 	args_exit(&args);
+	traffic_def_exit(&def);
 	generator_exit(&generator);
 
 	return 0;
