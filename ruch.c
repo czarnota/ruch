@@ -14,8 +14,40 @@
 #include <stdint.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <time.h>
 
 #define ARRAY_SIZE(x) (sizeof(x) / sizeof(*(x)))
+#define ARRAY_APPEND(array, item) append(&array, &array ## _cap, &array ## _len, (item), sizeof(*(item)))
+#define ARRAY_CLEAR(array) do {\
+		free((array)); \
+		array = 0; \
+		array ## _len = 0; \
+		array ## _cap = 0; \
+	} while (0)
+#define ARRAY(type, name) \
+	type *name; \
+	unsigned int name ## _len; \
+	unsigned int name ## _cap
+
+static void append(void *ptr, unsigned int *cap, unsigned int *len, const void *item,
+	    unsigned int size)
+{
+	void **array = (void **)ptr;
+
+	if (*len == *cap) {
+		if (*cap == 0)
+			*cap = 8;
+		else
+			*cap *= 2;
+
+		*array = realloc(*array, *cap * size);
+		if (!*array)
+			exit(1);
+	}
+
+	memcpy((unsigned char *)*array + *len * size, item, size);
+	*len += 1;
+}
 
 struct vlanhdr {
 	uint16_t tci;
@@ -23,6 +55,7 @@ struct vlanhdr {
 } __attribute__((packed));
 
 #define ETHERTYPE(x) { #x, ETH_P_##x }
+#define ETHERTYPE_ALIAS(x, y) { #x, ETH_P_##y }
 static const struct {
 	const char *name;
 	uint16_t value;
@@ -48,8 +81,10 @@ static const struct {
 	ETHERTYPE(RARP),
 	ETHERTYPE(ATALK),
 	ETHERTYPE(AARP),
-	ETHERTYPE(8021Q),
-	ETHERTYPE(8021AD),
+	ETHERTYPE_ALIAS(8021.Q, 8021Q),
+	ETHERTYPE_ALIAS(8021.AD, 8021AD),
+	ETHERTYPE_ALIAS(vlan, 8021Q),
+	ETHERTYPE_ALIAS(qinq, 8021AD),
 	ETHERTYPE(IPX),
 	ETHERTYPE(IPV6),
 	ETHERTYPE(PAUSE),
@@ -123,15 +158,14 @@ static void random_mac_addr(unsigned char *octet)
 		octet[i] = rand() % 250 + 10;
 }
 
-struct traffic_def {
+struct frame_def {
 	struct ethhdr ethhdr;
 	struct vlanhdr vlans[2];
 	unsigned int vlans_len;
-	int ifindex;
 	unsigned int eth_len;
 };
 
-static void traffic_def_init(struct traffic_def *self)
+static void frame_def_init(struct frame_def *self)
 {
 	memset(self, 0, sizeof *self);
 
@@ -142,8 +176,44 @@ static void traffic_def_init(struct traffic_def *self)
 	self->eth_len = 200;
 }
 
+static void frame_def_exit(struct frame_def *self)
+{
+	return;
+}
+
+struct traffic_def {
+	ARRAY(struct frame_def, frames);
+	int ifindex;
+};
+
+static void traffic_def_init(struct traffic_def *self)
+{
+	memset(self, 0, sizeof *self);
+}
+
+static void traffic_def_frame_def_add(struct traffic_def *self)
+{
+	struct frame_def frame_def;
+
+	frame_def_init(&frame_def);
+
+	ARRAY_APPEND(self->frames, &frame_def);
+}
+
+static struct frame_def *
+traffic_def_frame_def_last(const struct traffic_def *self)
+{
+	return &self->frames[self->frames_len - 1];
+}
+
 static void traffic_def_exit(struct traffic_def *self)
 {
+	unsigned int i = 0;
+
+	for (i = 0; i < self->frames_len; ++i)
+		frame_def_exit(&self->frames[i]);
+
+	ARRAY_CLEAR(self->frames);
 }
 
 struct generator {
@@ -159,24 +229,29 @@ static int generator_init(struct generator *self)
 	return 0;
 }
 
-static void generator_send(struct generator *self, const struct traffic_def *def)
-{
-	struct sockaddr_ll addr = { 0 };
-	ssize_t ret;
+struct packet {
 	unsigned char packet[1514];
+	struct sockaddr_ll addr;
+	unsigned int len;
+};
+
+void packet_init_from_frame_def(struct packet *self, const struct frame_def *def)
+{
 	unsigned char *ptr;
-	unsigned int i;
+	unsigned int i = 0;
 
-	addr.sll_family = AF_PACKET;
-	addr.sll_ifindex = def->ifindex;
-	addr.sll_halen = ETHER_ADDR_LEN;
-	addr.sll_protocol = def->ethhdr.h_proto;
+	memset(self, 0, sizeof *self);
 
-	memcpy(addr.sll_addr,def->ethhdr.h_dest, sizeof def->ethhdr.h_dest);
+	self->addr.sll_family = AF_PACKET;
+	self->addr.sll_halen = ETHER_ADDR_LEN;
+	self->addr.sll_protocol = def->ethhdr.h_proto;
 
-	ptr = packet;
+	memcpy(self->addr.sll_addr, def->ethhdr.h_dest, sizeof def->ethhdr.h_dest);
+
+	ptr = self->packet;
 
 	memcpy(ptr, &def->ethhdr, sizeof def->ethhdr);
+
 	ptr += sizeof def->ethhdr;
 
 	for (i = 0; i < def->vlans_len; ++i) {
@@ -184,16 +259,60 @@ static void generator_send(struct generator *self, const struct traffic_def *def
 		ptr += sizeof def->vlans[i];
 	}
 
-	ptr = packet;
+	self->len = def->eth_len;
+}
+
+int packet_send(const struct packet *self, int fd, int ifindex)
+{
+	ssize_t ret;
+	struct sockaddr_ll addr = self->addr;
+
+	addr.sll_ifindex = ifindex;
+
+	ret = sendto(fd, self->packet, self->len, 0,
+		     (const struct sockaddr *)&addr, sizeof addr);
+	if (ret != self->len)
+		return -1;
+
+	return 0;
+}
+
+void packet_exit(struct packet *self)
+{
+	return;
+}
+
+static void generator_send(struct generator *self, const struct traffic_def *traffic_def)
+{
+	int ret;
+	unsigned char packet[1514];
+	unsigned char *ptr;
+	unsigned int i;
+	struct frame_def *def = &traffic_def->frames[0];
+	ARRAY(struct packet, packets);
+
+	ARRAY_CLEAR(packets);
+
+	for (i = 0; i < traffic_def->frames_len; ++i) {
+		struct packet packet;
+		packet_init_from_frame_def(&packet, &traffic_def->frames[i]);
+		ARRAY_APPEND(packets, &packet);
+	}
 
 	while (1) {
-		ret = sendto(self->fd, ptr, def->eth_len, 0,
-			     (const struct sockaddr *)&addr, sizeof addr);
-		if (ret != def->eth_len) {
-			perror("ruch: err: sendto() failed");
-			break;
+		for (i = 0; i < packets_len; ++i) {
+			struct packet *packet = &packets[i];
+
+			ret = packet_send(packet, self->fd, traffic_def->ifindex);
+			if (ret) {
+				perror("ruch: err: packet_send() failed");
+				break;
+			}
 		}
 	}
+
+	for (i = 0; i < packets_len; ++i)
+		packet_exit(&packets[i]);
 }
 
 static void generator_exit(struct generator *self)
@@ -251,7 +370,7 @@ static void args_exit(struct args *self)
 	return;
 }
 
-static int fill_vlan(struct traffic_def *def, struct args *args)
+static int fill_vlan(struct frame_def *def, struct args *args)
 {
 	const char *arg;
 	struct vlanhdr *vlanhdr = &def->vlans[def->vlans_len];
@@ -312,10 +431,10 @@ static int fill_vlan(struct traffic_def *def, struct args *args)
 				return 1;
 			}
 
-			def->ethhdr.h_proto = htons(type);
+			vlanhdr->proto = htons(type);
 
-			if (def->ethhdr.h_proto == ETH_P_8021Q ||
-			    def->ethhdr.h_proto == ETH_P_8021AD) {
+			if (vlanhdr->proto == ETH_P_8021Q ||
+			    vlanhdr->proto == ETH_P_8021AD) {
 				ret = fill_vlan(def, args);
 				if (ret) {
 					fprintf(stderr, "ruch: err: bad vlan\n");
@@ -335,10 +454,16 @@ static int fill_vlan(struct traffic_def *def, struct args *args)
 	return 0;
 }
 
-static int cmd_eth(struct traffic_def *def, struct args *args)
+static int cmd_eth(struct traffic_def *traffic_def, struct args *args)
 {
 	const char *arg = NULL;
 	struct ether_addr ether_addr;
+	struct frame_def *def = NULL;
+
+	traffic_def_frame_def_add(traffic_def);
+
+	def = traffic_def_frame_def_last(traffic_def);
+
 	while (1) {
 		arg = args_shift(args);
 		if (!arg)
@@ -458,6 +583,10 @@ static const struct {
 	}
 };
 
+static const char *funny_texts[] = {
+	"firing traffic",
+};
+
 int main(int argc, const char *const *argv)
 {
 	const char *cmd;
@@ -466,6 +595,8 @@ int main(int argc, const char *const *argv)
 	struct generator generator;
 	struct traffic_def def = {0};
 	int err;
+
+	srand(time(NULL));
 
 	if (argc <= 1)
 		return 0;
@@ -502,10 +633,11 @@ nextcmd:
 			}
 		}
 
-		break;
+		fprintf(stderr, "ruch: err: unknown parameter %s\n", cmd);
+		goto err;
 	}
 
-	printf("ruch: inf: firing traffic...\n");
+	printf("ruch: inf: %s...\n", funny_texts[rand() % ARRAY_SIZE(funny_texts)]);
 	generator_send(&generator, &def);
 
 err:
