@@ -7,6 +7,7 @@
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
 #include <net/if.h>
+#include <linux/ip.h>
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -81,8 +82,8 @@ static const struct {
 	ETHERTYPE(RARP),
 	ETHERTYPE(ATALK),
 	ETHERTYPE(AARP),
-	ETHERTYPE_ALIAS(8021.Q, 8021Q),
-	ETHERTYPE_ALIAS(8021.AD, 8021AD),
+	ETHERTYPE_ALIAS(802.1Q, 8021Q),
+	ETHERTYPE_ALIAS(802.1AD, 8021AD),
 	ETHERTYPE_ALIAS(vlan, 8021Q),
 	ETHERTYPE_ALIAS(qinq, 8021AD),
 	ETHERTYPE(IPX),
@@ -159,21 +160,42 @@ static void random_mac_addr(unsigned char *octet)
 }
 
 struct frame_def {
-	struct ethhdr ethhdr;
-	struct vlanhdr vlans[2];
-	unsigned int vlans_len;
-	unsigned int eth_len;
+	unsigned char packet[1600];
+	unsigned int i;
 };
+
+static void *frame_def_data(struct frame_def *self)
+{
+	return &self->packet[self->i];
+}
+
+static void *frame_def_begin(struct frame_def *self)
+{
+	return &self->packet[0];
+}
 
 static void frame_def_init(struct frame_def *self)
 {
+	struct ethhdr *ethhdr;
+
 	memset(self, 0, sizeof *self);
 
-	random_mac_addr(self->ethhdr.h_dest);
-	random_mac_addr(self->ethhdr.h_source);
+	ethhdr = frame_def_data(self);
 
-	self->ethhdr.h_proto = htons(ETH_P_IP);
-	self->eth_len = 200;
+	random_mac_addr(ethhdr->h_dest);
+	random_mac_addr(ethhdr->h_source);
+
+	ethhdr->h_proto = htons(ETH_P_IP);
+}
+
+static void frame_def_push(struct frame_def *self, unsigned int size)
+{
+	self->i += size;
+}
+
+static void frame_def_pop(struct frame_def *self, unsigned int size)
+{
+	self->i -= size;
 }
 
 static void frame_def_exit(struct frame_def *self)
@@ -184,6 +206,7 @@ static void frame_def_exit(struct frame_def *self)
 struct traffic_def {
 	ARRAY(struct frame_def, frames);
 	int ifindex;
+	unsigned int count;
 };
 
 static void traffic_def_init(struct traffic_def *self)
@@ -237,29 +260,20 @@ struct packet {
 
 void packet_init_from_frame_def(struct packet *self, const struct frame_def *def)
 {
-	unsigned char *ptr;
 	unsigned int i = 0;
+	struct ethhdr *ethhdr = frame_def_begin((struct frame_def *)def);
 
 	memset(self, 0, sizeof *self);
 
 	self->addr.sll_family = AF_PACKET;
 	self->addr.sll_halen = ETHER_ADDR_LEN;
-	self->addr.sll_protocol = def->ethhdr.h_proto;
+	self->addr.sll_protocol = ethhdr->h_proto;
 
-	memcpy(self->addr.sll_addr, def->ethhdr.h_dest, sizeof def->ethhdr.h_dest);
+	memcpy(self->addr.sll_addr, ethhdr->h_dest, sizeof ethhdr->h_dest);
 
-	ptr = self->packet;
+	memcpy(self->packet, def->packet, def->i);
 
-	memcpy(ptr, &def->ethhdr, sizeof def->ethhdr);
-
-	ptr += sizeof def->ethhdr;
-
-	for (i = 0; i < def->vlans_len; ++i) {
-		memcpy(ptr, &def->vlans[i], sizeof def->vlans[i]);
-		ptr += sizeof def->vlans[i];
-	}
-
-	self->len = def->eth_len;
+	self->len = def->i;
 }
 
 int packet_send(const struct packet *self, int fd, int ifindex)
@@ -288,6 +302,7 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 	unsigned char packet[1514];
 	unsigned char *ptr;
 	unsigned int i;
+	unsigned int j = 0;
 	struct frame_def *def = &traffic_def->frames[0];
 	ARRAY(struct packet, packets);
 
@@ -299,6 +314,12 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 		ARRAY_APPEND(packets, &packet);
 	}
 
+	if (traffic_def->count) {
+		printf("ruch: inf: sending %d frames...\n", traffic_def->count);
+	} else {
+		printf("ruch: inf: sending frames...\n");
+	}
+
 	while (1) {
 		for (i = 0; i < packets_len; ++i) {
 			struct packet *packet = &packets[i];
@@ -308,8 +329,13 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 				perror("ruch: err: packet_send() failed");
 				break;
 			}
+			j++;
+
+			if (j >= traffic_def->count)
+				goto finished;
 		}
 	}
+finished:
 
 	for (i = 0; i < packets_len; ++i)
 		packet_exit(&packets[i]);
@@ -370,15 +396,13 @@ static void args_exit(struct args *self)
 	return;
 }
 
-static int fill_vlan(struct frame_def *def, struct args *args)
+static int cmd_vlan(struct traffic_def *traffic_def, struct args *args)
 {
 	const char *arg;
-	struct vlanhdr *vlanhdr = &def->vlans[def->vlans_len];
+	struct frame_def *def = traffic_def_frame_def_last(traffic_def);
 	unsigned int tmp;
-
+	struct vlanhdr *vlanhdr = frame_def_data(def);
 	uint32_t tci = vlanhdr->tci;
-
-	def->vlans_len++;
 
 	tci = ntohl(tci);
 
@@ -427,20 +451,11 @@ static int fill_vlan(struct frame_def *def, struct args *args)
 
 			type = ethertype_get(arg);
 			if (type <= 0) {
-				fprintf(stderr, "ruch: err: invalid type\n");
+				fprintf(stderr, "ruch: err: invalid type \"%s\"\n", arg);
 				return 1;
 			}
 
 			vlanhdr->proto = htons(type);
-
-			if (vlanhdr->proto == ETH_P_8021Q ||
-			    vlanhdr->proto == ETH_P_8021AD) {
-				ret = fill_vlan(def, args);
-				if (ret) {
-					fprintf(stderr, "ruch: err: bad vlan\n");
-					return 1;
-				}
-			}
 
 			continue;
 		}
@@ -451,6 +466,8 @@ static int fill_vlan(struct frame_def *def, struct args *args)
 
 	vlanhdr->tci = htons(tci);
 
+	frame_def_push(def, sizeof *vlanhdr);
+
 	return 0;
 }
 
@@ -459,10 +476,13 @@ static int cmd_eth(struct traffic_def *traffic_def, struct args *args)
 	const char *arg = NULL;
 	struct ether_addr ether_addr;
 	struct frame_def *def = NULL;
+	struct ethhdr *ethhdr = NULL;
 
 	traffic_def_frame_def_add(traffic_def);
 
 	def = traffic_def_frame_def_last(traffic_def);
+
+	ethhdr = frame_def_data(def);
 
 	while (1) {
 		arg = args_shift(args);
@@ -479,7 +499,7 @@ static int cmd_eth(struct traffic_def *traffic_def, struct args *args)
 				return 1;
 			}
 
-			memcpy(def->ethhdr.h_source, &ether_addr, sizeof def->ethhdr.h_source);
+			memcpy(ethhdr->h_source, &ether_addr, sizeof ethhdr->h_source);
 
 			continue;
 		}
@@ -493,7 +513,7 @@ static int cmd_eth(struct traffic_def *traffic_def, struct args *args)
 				return 1;
 			}
 
-			memcpy(def->ethhdr.h_dest, &ether_addr, sizeof def->ethhdr.h_source);
+			memcpy(ethhdr->h_dest, &ether_addr, sizeof ethhdr->h_source);
 
 			continue;
 		}
@@ -507,48 +527,41 @@ static int cmd_eth(struct traffic_def *traffic_def, struct args *args)
 
 			type = ethertype_get(arg);
 			if (type <= 0) {
-				fprintf(stderr, "ruch: err: invalid type\n");
+				fprintf(stderr, "ruch: err: invalid type \"%s\"\n", arg);
 				return 1;
 			}
 
-			def->ethhdr.h_proto = htons(type);
-
-			if (def->ethhdr.h_proto == htons(ETH_P_8021Q) ||
-			    def->ethhdr.h_proto == htons(ETH_P_8021AD)) {
-				ret = fill_vlan(def, args);
-				if (ret) {
-					fprintf(stderr, "ruch: err: bad vlan\n");
-					return 1;
-				}
-			}
+			ethhdr->h_proto = htons(type);
 
 			continue;
 		}
-		if (strcmp(arg, "len") == 0) {
-			unsigned int len;
-
-			arg = args_shift(args);
-			if (!arg)
-				break;
-
-			if (1 != sscanf(arg, "%u", &len)) {
-				fprintf(stderr, "ruch: err: invalid length\n");
-				return 1;
-			}
-
-			if (len < sizeof(struct ethhdr) || 1514 < len) {
-				fprintf(stderr, "ruch: err: invalid length\n");
-				return 1;
-			}
-
-			def->eth_len = len;
-
-			continue;
-		}
-
 		args_unshift(args);
 		break;
 	}
+
+	frame_def_push(def, sizeof *ethhdr);
+
+	return 0;
+}
+
+static int cmd_len(struct traffic_def *traffic_def, struct args *args)
+{
+	unsigned int len;
+	struct frame_def *def = NULL;
+
+	def = traffic_def_frame_def_last(traffic_def);
+
+	if (1 != args_shiftf(args, "%u", &len)) {
+		fprintf(stderr, "ruch: err: invalid length\n");
+		return 1;
+	}
+
+	if (len < sizeof(struct ethhdr) || 1514 < len) {
+		fprintf(stderr, "ruch: err: invalid length\n");
+		return 1;
+	}
+
+	frame_def_push(def, len);
 
 	return 0;
 }
@@ -559,10 +572,23 @@ static int cmd_dev(struct traffic_def *def, struct args *args)
 
 	arg = args_shift(args);
 
-	if (!arg)
-		return 1; def->ifindex = if_nametoindex(arg);
+	if (!arg) {
+		fprintf(stderr, "ruch: err: dev requires an argument\n");
+		return 1;
+	}
+	def->ifindex = if_nametoindex(arg);
 	if (!def->ifindex) {
 		perror("ruch: err: can't get ifindex");
+		return 1;
+	}
+
+	return 0;
+}
+
+static int cmd_count(struct traffic_def *def, struct args *args)
+{
+	if (1 != args_shiftf(args, "%u", &def->count)) {
+		perror("ruch: err: can't get count");
 		return 1;
 	}
 
@@ -578,13 +604,21 @@ static const struct {
 		.doit = cmd_eth
 	},
 	{
+		.cmd = "len",
+		.doit = cmd_len
+	},
+	{
 		.cmd = "dev",
 		.doit = cmd_dev
-	}
-};
-
-static const char *funny_texts[] = {
-	"firing traffic",
+	},
+	{
+		.cmd = "count",
+		.doit = cmd_count
+	},
+	{
+		.cmd = "vlan",
+		.doit = cmd_vlan
+	},
 };
 
 int main(int argc, const char *const *argv)
@@ -627,8 +661,10 @@ nextcmd:
 
 		for (i = 0; i < ARRAY_SIZE(cmds); ++i) {
 			if (strcmp(cmds[i].cmd, cmd) == 0) {
-				if (cmds[i].doit(&def, &args))
+				if (cmds[i].doit(&def, &args)) {
+					fprintf(stderr, "ruch: err: \"%s\" failed\n", cmd);
 					goto err;
+				}
 				goto nextcmd;
 			}
 		}
@@ -637,7 +673,6 @@ nextcmd:
 		goto err;
 	}
 
-	printf("ruch: inf: %s...\n", funny_texts[rand() % ARRAY_SIZE(funny_texts)]);
 	generator_send(&generator, &def);
 
 err:
