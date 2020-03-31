@@ -8,6 +8,7 @@
 #include <linux/if_packet.h>
 #include <net/if.h>
 #include <linux/ip.h>
+#include <linux/udp.h>
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -54,6 +55,62 @@ struct vlanhdr {
 	uint16_t tci;
 	uint16_t proto;
 } __attribute__((packed));
+
+static int streqi(const char *a, const char *b)
+{
+	unsigned int i = 0;
+
+	if (strlen(a) != strlen(b))
+		return 0;
+
+	for (i = 0; i < strlen(a); ++i)
+		if (tolower(a[i]) != tolower(b[i]))
+			return 0;
+
+	return 1;
+}
+
+#define IP_PROTO(x) { #x, IPPROTO_##x }
+static const struct {
+	const char *name;
+	uint16_t value;
+} protocols[] = {
+    IP_PROTO(IP),
+    IP_PROTO(ICMP),
+    IP_PROTO(IGMP),
+    IP_PROTO(IPIP),
+    IP_PROTO(TCP),
+    IP_PROTO(EGP),
+    IP_PROTO(PUP),
+    IP_PROTO(UDP),
+    IP_PROTO(IDP),
+    IP_PROTO(TP),
+    IP_PROTO(DCCP),
+    IP_PROTO(IPV6),
+    IP_PROTO(RSVP),
+    IP_PROTO(GRE),
+    IP_PROTO(ESP),
+    IP_PROTO(AH),
+    IP_PROTO(MTP),
+    IP_PROTO(BEETPH),
+    IP_PROTO(ENCAP),
+    IP_PROTO(PIM),
+    IP_PROTO(COMP),
+    IP_PROTO(SCTP),
+    IP_PROTO(UDPLITE),
+    IP_PROTO(MPLS),
+    IP_PROTO(RAW),
+};
+static int ipproto_get(const char *protocol)
+{
+	unsigned int i = 0;
+
+	for (i = 0; i < ARRAY_SIZE(protocols); ++i)
+		if (streqi(protocols[i].name, protocol))
+                  return protocols[i].value;
+
+        return -1;
+}
 
 #define ETHERTYPE(x) { #x, ETH_P_##x }
 #define ETHERTYPE_ALIAS(x, y) { #x, ETH_P_##y }
@@ -127,25 +184,12 @@ static const struct {
 	ETHERTYPE(PHONET),
 	ETHERTYPE(IEEE802154),
 };
-static int ethertype_eq(const char *a, const char *b)
-{
-	unsigned int i = 0;
-
-	if (strlen(a) != strlen(b))
-		return 0;
-
-	for (i = 0; i < strlen(a); ++i)
-		if (tolower(a[i]) != tolower(b[i]))
-			return 0;
-
-	return 1;
-}
 static int ethertype_get(const char *ethertype)
 {
 	unsigned int i = 0;
 
 	for (i = 0; i < ARRAY_SIZE(ethertypes); ++i)
-		if (ethertype_eq(ethertypes[i].name, ethertype))
+		if (streqi(ethertypes[i].name, ethertype))
                   return ethertypes[i].value;
 
         return -1;
@@ -172,6 +216,11 @@ static void *frame_def_data(struct frame_def *self)
 static void *frame_def_begin(struct frame_def *self)
 {
 	return &self->packet[0];
+}
+
+static void *frame_def_offset(struct frame_def *self, unsigned int offset)
+{
+	return self->packet + offset;
 }
 
 static void frame_def_init(struct frame_def *self)
@@ -239,26 +288,13 @@ static void traffic_def_exit(struct traffic_def *self)
 	ARRAY_CLEAR(self->frames);
 }
 
-struct generator {
-	int fd;
-};
-
-static int generator_init(struct generator *self)
-{
-	self->fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
-	if (self->fd < 0)
-		return -1;
-
-	return 0;
-}
-
 struct packet {
 	unsigned char packet[1514];
 	struct sockaddr_ll addr;
 	unsigned int len;
 };
 
-void packet_init_from_frame_def(struct packet *self, const struct frame_def *def)
+void packet_from_frame_def(struct packet *self, const struct frame_def *def)
 {
 	unsigned int i = 0;
 	struct ethhdr *ethhdr = frame_def_begin((struct frame_def *)def);
@@ -274,6 +310,12 @@ void packet_init_from_frame_def(struct packet *self, const struct frame_def *def
 	memcpy(self->packet, def->packet, def->i);
 
 	self->len = def->i;
+}
+
+void packet_into_frame_def(const struct packet *self, struct frame_def *def)
+{
+	memcpy(def->packet, self->packet, self->len);
+	def->i = self->len;
 }
 
 int packet_send(const struct packet *self, int fd, int ifindex)
@@ -296,6 +338,22 @@ void packet_exit(struct packet *self)
 	return;
 }
 
+struct generator {
+	int fd;
+	int send_called;
+};
+
+static int generator_init(struct generator *self)
+{
+	memset(self, 0, sizeof *self);
+
+	self->fd = socket(AF_PACKET, SOCK_RAW, htons(ETH_P_ALL));
+	if (self->fd < 0)
+		return -1;
+
+	return 0;
+}
+
 static void generator_send(struct generator *self, const struct traffic_def *traffic_def)
 {
 	int ret;
@@ -310,7 +368,7 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 
 	for (i = 0; i < traffic_def->frames_len; ++i) {
 		struct packet packet;
-		packet_init_from_frame_def(&packet, &traffic_def->frames[i]);
+		packet_from_frame_def(&packet, &traffic_def->frames[i]);
 		ARRAY_APPEND(packets, &packet);
 	}
 
@@ -331,10 +389,12 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 			}
 			j++;
 
-			if (j >= traffic_def->count)
+			if (traffic_def->count && j >= traffic_def->count)
 				goto finished;
 		}
 	}
+
+	self->send_called = 1;
 finished:
 
 	for (i = 0; i < packets_len; ++i)
@@ -595,6 +655,128 @@ static int cmd_count(struct traffic_def *def, struct args *args)
 	return 0;
 }
 
+static int cmd_send(struct traffic_def *def, struct args *args)
+{
+	return 0;
+}
+
+static int cmd_ip(struct traffic_def *traffic_def, struct args *args)
+{
+	const char *arg = NULL;
+	struct frame_def *def = NULL;
+	struct iphdr *iphdr = NULL;
+
+	def = traffic_def_frame_def_last(traffic_def);
+
+	iphdr = frame_def_data(def);
+
+	iphdr->ihl = 5;
+	iphdr->version = 4;
+	iphdr->tos = 0;
+	iphdr->tot_len = 0;
+	iphdr->id = 0;
+	iphdr->frag_off = 0;
+	iphdr->ttl = 64;
+	iphdr->check = 0;
+	iphdr->protocol = 0;
+
+	inet_pton(AF_INET, "10.0.0.1", &iphdr->saddr);
+	inet_pton(AF_INET, "20.0.0.1", &iphdr->daddr);
+
+	while (1) {
+		arg = args_shift(args);
+		if (!arg)
+			break;
+
+		if (strcmp(arg, "tot_len") == 0) {
+			uint16_t tot_len;
+			if (1 != args_shiftf(args, "%hu", &tot_len)) {
+				fprintf(stderr, "ruch: err: ip: len requires an argument\n");
+				return 1;
+			}
+			iphdr->tot_len = htons(tot_len);
+
+			continue;
+		}
+
+		if (strcmp(arg, "proto") == 0) {
+			int proto;
+			int ret;
+
+			arg = args_shift(args);
+			if (!arg)
+				break;
+
+			proto = ipproto_get(arg);
+			if (proto <= 0) {
+				fprintf(stderr, "ruch: err: ip: invalid proto \"%s\"\n", arg);
+				return 1;
+			}
+
+			iphdr->protocol = proto;
+
+			continue;
+		}
+
+		args_unshift(args);
+		break;
+	}
+
+	frame_def_push(def, sizeof *iphdr);
+
+	return 0;
+}
+
+static int cmd_udp(struct traffic_def *traffic_def, struct args *args)
+{
+	const char *arg = NULL;
+	struct frame_def *def = NULL;
+	struct udphdr *udphdr = NULL;
+
+	def = traffic_def_frame_def_last(traffic_def);
+
+	udphdr = frame_def_data(def);
+
+	udphdr->source = htons(7001);
+	udphdr->dest = htons(8001);
+	udphdr->len = 0;
+	udphdr->check = 0;
+
+	while (1) {
+		arg = args_shift(args);
+		if (!arg)
+			break;
+
+		if (strcmp(arg, "s") == 0) {
+			uint16_t s;
+			if (1 != args_shiftf(args, "%hu", &s)) {
+				fprintf(stderr, "ruch: err: udp: s requires an argument\n");
+				return 1;
+			}
+			udphdr->source = htons(s);
+
+			continue;
+		}
+		if (strcmp(arg, "d") == 0) {
+			uint16_t d;
+			if (1 != args_shiftf(args, "%hu", &d)) {
+				fprintf(stderr, "ruch: err: udp: d requires an argument\n");
+				return 1;
+			}
+			udphdr->dest = htons(d);
+
+			continue;
+		}
+
+		args_unshift(args);
+		break;
+	}
+
+	frame_def_push(def, sizeof *udphdr);
+
+	return 0;
+}
+
 static const struct {
 	const char *cmd;
 	int (*doit)(struct traffic_def *def, struct args *args);
@@ -619,12 +801,126 @@ static const struct {
 		.cmd = "vlan",
 		.doit = cmd_vlan
 	},
+	{
+		.cmd = "send",
+		.doit = cmd_send
+	},
+	{
+		.cmd = "ip",
+		.doit = cmd_ip
+	},
+	{
+		.cmd = "udp",
+		.doit = cmd_udp
+	}
+};
+
+/* Calculate correct packets lengths after packet is prepared */
+static int process_len(struct frame_def *def)
+{
+	unsigned int offset = 0;
+	struct ethhdr *ethhdr = frame_def_offset(def, offset);
+	uint16_t eth_proto;
+	struct iphdr *iphdr;
+	struct udphdr *udphdr;
+
+	ethhdr = frame_def_offset(def, offset);
+
+	eth_proto = ethhdr->h_proto;
+	offset += sizeof *ethhdr;
+
+	while (eth_proto == htons(ETH_P_8021Q) ||
+	       eth_proto == htons(ETH_P_8021AD)) {
+		struct vlanhdr *vlanhdr = frame_def_offset(def, offset);
+
+		eth_proto = vlanhdr->proto;
+		offset += sizeof *vlanhdr;
+	}
+
+	/* At this moment eth_proto is not vlan */
+
+	if (eth_proto != htons(ETH_P_IP))
+		return 0;
+
+	iphdr = frame_def_offset(def, offset);
+	iphdr->tot_len = htons((unsigned char *)frame_def_data(def) -
+		(unsigned char *)iphdr);
+
+	offset += sizeof *iphdr;
+
+	if (iphdr->protocol != IPPROTO_UDP)
+		return 0;
+
+	udphdr = frame_def_offset(def, offset);
+	udphdr->len = htons((unsigned char *)frame_def_data(def) -
+		(unsigned char *)udphdr);
+
+	return 0;
+}
+
+static unsigned short csum(unsigned short *buf, int nwords)
+{
+	unsigned long sum;
+
+	for (sum = 0; nwords > 0; nwords--)
+		sum += *buf++;
+	sum = (sum >> 16) + (sum &0xffff);
+	sum += (sum >> 16);
+
+	return (unsigned short)(~sum);
+}
+
+static int process_csum(struct frame_def *def)
+{
+	unsigned int offset = 0;
+	struct ethhdr *ethhdr;
+	uint16_t eth_proto;
+	struct iphdr *iphdr;
+	struct udphdr *udphdr;
+
+	ethhdr = frame_def_offset(def, offset);
+
+	eth_proto = ethhdr->h_proto;
+	offset += sizeof *ethhdr;
+
+	while (eth_proto == htons(ETH_P_8021Q) ||
+	       eth_proto == htons(ETH_P_8021AD)) {
+		struct vlanhdr *vlanhdr = frame_def_offset(def, offset);
+
+		eth_proto = vlanhdr->proto;
+		offset += sizeof *vlanhdr;
+	}
+
+	/* At this moment eth_proto is not vlan */
+
+	if (eth_proto != htons(ETH_P_IP))
+		return 0;
+
+	iphdr = frame_def_offset(def, offset);
+
+	if (iphdr->protocol != IPPROTO_UDP)
+		return 0;
+
+	iphdr->check = csum((unsigned short *)iphdr, sizeof(struct iphdr) >> 1);
+
+	offset += sizeof *iphdr;
+	udphdr = frame_def_offset(def, offset);
+	/* TODO: Calculate UDP checksum */
+	udphdr->check = 0;
+
+	return 0;
+}
+
+int (*const frame_processors[])(struct frame_def *def) = {
+	process_len,
+	process_csum
 };
 
 int main(int argc, const char *const *argv)
 {
 	const char *cmd;
 	unsigned int i = 0;
+	unsigned int j = 0;
 	struct args args;
 	struct generator generator;
 	struct traffic_def def = {0};
@@ -643,7 +939,7 @@ int main(int argc, const char *const *argv)
 
 	printf("ruch: Ruch - simple, yet effective traffic generator\n");
 	printf("ruch: Version 0.1.0\n");
-	printf("ruch: Copyright (C) 2020. P. Czarnota <p@czarnota.io>\n");
+	printf("ruch: Copyright (C) 2020 by P. Czarnota <p@czarnota.io>\n");
 	printf("ruch: Licensed under GNU GPL version 2\n");
 	printf("ruch: inf: generator initialized\n");
 
@@ -671,6 +967,15 @@ nextcmd:
 
 		fprintf(stderr, "ruch: err: unknown parameter %s\n", cmd);
 		goto err;
+	}
+
+	for (i = 0; i < def.frames_len; ++i) {
+		for (j = 0; j < ARRAY_SIZE(frame_processors); ++j) {
+			if (frame_processors[j](&def.frames[i])) {
+				fprintf(stderr, "ruch: err: frame processing failed\n");
+				goto err;
+			}
+		}
 	}
 
 	generator_send(&generator, &def);
