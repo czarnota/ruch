@@ -385,6 +385,18 @@ static int generator_init(struct generator *self)
 	return 0;
 }
 
+static float time_since(float *time)
+{
+	float old = *time;
+	struct timespec t;
+
+	clock_gettime(CLOCK_MONOTONIC_RAW, &t);
+
+	*time = (float)t.tv_sec + (float)t.tv_nsec / 1000000000.0f;
+
+	return *time - old;
+}
+
 static void generator_send(struct generator *self, const struct traffic_def *traffic_def)
 {
 	int ret;
@@ -393,6 +405,10 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 	unsigned int i;
 	unsigned int j = 0;
 	struct frame_def *def = &traffic_def->frames[0];
+	unsigned int size = 0;
+	float dt = 0.0f;
+	float throughput;
+	float delta;
 	ARRAY(struct packet, packets);
 
 	ARRAY_CLEAR(packets);
@@ -411,6 +427,8 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 		printf("ruch: inf: sending frames...\n");
 	}
 
+	time_since(&dt);
+
 	while (1) {
 		for (i = 0; i < packets_len; ++i) {
 			struct packet *packet = &packets[i];
@@ -422,6 +440,8 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 			}
 			j++;
 
+			size += packet->len;
+
 			if (traffic_def->count && j >= traffic_def->count)
 				goto finished;
 		}
@@ -429,6 +449,11 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 
 	self->send_called = 1;
 finished:
+	delta = time_since(&dt);
+	if (delta) {
+		throughput = ((float)size / delta) * 8;
+		printf("ruch: inf: achieved data rate of %f Mbps\n", throughput / 1024.0f / 1024.0f);
+	}
 
 	for (i = 0; i < packets_len; ++i)
 		packet_exit(&packets[i]);
@@ -1012,7 +1037,6 @@ nextcmd:
 	}
 
 	generator_send(&generator, &def);
-
 err:
 	args_exit(&args);
 	traffic_def_exit(&def);
