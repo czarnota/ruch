@@ -404,7 +404,7 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 	}
 
 	if (traffic_def->count) {
-		printf("ruch: inf: sending %d (%db) frames...\n",
+		printf("ruch: inf: sending %d frames (%d bytes)...\n",
 		       traffic_def->count,
 		       traffic_def_size_in_bytes(traffic_def));
 	} else {
