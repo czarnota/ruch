@@ -199,7 +199,11 @@ static void random_mac_addr(unsigned char *octet)
 {
 	unsigned int i = 0;
 
-	for (i = 0; i < ETHER_ADDR_LEN; ++i)
+	octet[0] = 0xD8;
+	octet[1] = 0xCB;
+	octet[2] = 0x8A;
+
+	for (i = 3; i < ETHER_ADDR_LEN; ++i)
 		octet[i] = rand() % 250 + 10;
 }
 
@@ -247,6 +251,11 @@ static void frame_def_pop(struct frame_def *self, unsigned int size)
 	self->i -= size;
 }
 
+static unsigned int frame_def_size(const struct frame_def *self)
+{
+	return self->i;
+}
+
 static void frame_def_exit(struct frame_def *self)
 {
 	return;
@@ -270,6 +279,28 @@ static void traffic_def_frame_def_add(struct traffic_def *self)
 	frame_def_init(&frame_def);
 
 	ARRAY_APPEND(self->frames, &frame_def);
+}
+
+static unsigned int traffic_def_size_in_bytes(const struct traffic_def *self)
+{
+	unsigned int size = 0;
+	unsigned int i = 0;
+
+	if (!self->frames_len)
+		return 0;
+
+	if (!self->count)
+		return 0;
+
+	for (i = 0; i < self->frames_len; ++i)
+		size += frame_def_size(&self->frames[i]);
+
+	size *= (self->count / self->frames_len);
+
+	for (i = 0; i < (self->count % self->frames_len); ++i)
+		size += frame_def_size(&self->frames[i]);
+
+	return size;
 }
 
 static struct frame_def *
@@ -373,7 +404,9 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 	}
 
 	if (traffic_def->count) {
-		printf("ruch: inf: sending %d frames...\n", traffic_def->count);
+		printf("ruch: inf: sending %d (%db) frames...\n",
+		       traffic_def->count,
+		       traffic_def_size_in_bytes(traffic_def));
 	} else {
 		printf("ruch: inf: sending frames...\n");
 	}
@@ -573,7 +606,7 @@ static int cmd_eth(struct traffic_def *traffic_def, struct args *args)
 				return 1;
 			}
 
-			memcpy(ethhdr->h_dest, &ether_addr, sizeof ethhdr->h_source);
+			memcpy(ethhdr->h_dest, &ether_addr, sizeof ethhdr->h_dest);
 
 			continue;
 		}
