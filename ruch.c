@@ -356,7 +356,7 @@ static double packet_send_time(const struct packet *self, unsigned int rate)
 	if (!rate)
 		return 0.0f;
 
-	return (double)self->len / rate;
+	return (double)self->len / (rate / 8);
 }
 
 void packet_from_frame_def(struct packet *self, struct frame_def *def)
@@ -439,23 +439,18 @@ static double time_since(double *time)
 	return *time - old;
 }
 
-static double time_wait(double time)
+static void time_wait(double time)
 {
 	struct timespec t;
-	double ts;
 
 	if (time <= 0.0f)
-		return time;
+		return;
 
 	t.tv_sec = (time_t)time;
 	t.tv_nsec = (time - (unsigned long)time) * 1000000000;
 
-	time_since(&ts);
-
 	if (nanosleep(&t, NULL))
 		perror("ruch: err: nanosleep() failed");
-
-	return time - time_since(&ts);
 }
 
 static void generator_send(struct generator *self, const struct traffic_def *traffic_def)
@@ -499,7 +494,8 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 			if (traffic_def->rate) {
 				/* Wait to achieve the specified throughput */
 				time_to_wait += packet_send_time(&packet, traffic_def->rate) - time_since(&packet_time);
-				time_to_wait = time_wait(time_to_wait);
+				time_wait(time_to_wait);
+				time_to_wait -= time_since(&packet_time);
 			}
 
 			size += packet.len;
