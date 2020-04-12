@@ -439,6 +439,20 @@ static double time_since(double *time)
 	return *time - old;
 }
 
+static void time_wait(double time)
+{
+	struct timespec t;
+
+	if (time <= 0.0f)
+		return;
+
+	t.tv_sec = (time_t)time;
+	t.tv_nsec = (time - (unsigned long)time) * 1000000000;
+
+	if (nanosleep(&t, NULL))
+		perror("ruch: err: nanosleep() failed");
+}
+
 static void generator_send(struct generator *self, const struct traffic_def *traffic_def)
 {
 	int ret;
