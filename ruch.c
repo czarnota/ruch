@@ -434,7 +434,7 @@ static double time_since(double *time)
 
 	clock_gettime(CLOCK_MONOTONIC_RAW, &t);
 
-	*time = (double)t.tv_sec + (float)t.tv_nsec / 1000000000.0f;
+	*time = (double)t.tv_sec + (double)t.tv_nsec / 1000000000.0f;
 
 	return *time - old;
 }
