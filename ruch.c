@@ -9,6 +9,7 @@
 #include <net/if.h>
 #include <linux/ip.h>
 #include <linux/udp.h>
+#include <endian.h>
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -207,9 +208,18 @@ static void random_mac_addr(unsigned char *octet)
 		octet[i] = rand() % 250 + 10;
 }
 
+struct frame_filler {
+	void *p;
+	const unsigned int offset;
+	const unsigned int size;
+	void (*fill)(struct frame_filler *self, void *packet);
+	void (*destroy)(struct frame_filler *self);
+};
+
 struct frame_def {
 	unsigned char packet[1600];
 	unsigned int i;
+	ARRAY(struct frame_filler, fillers);
 };
 
 static void *frame_def_data(struct frame_def *self)
@@ -256,9 +266,22 @@ static unsigned int frame_def_size(const struct frame_def *self)
 	return self->i;
 }
 
+static void frame_def_filler_push(struct frame_def *self,
+				  struct frame_filler *filler)
+{
+	ARRAY_APPEND(self->fillers, filler);
+	frame_def_push(self, filler->size);
+}
+
 static void frame_def_exit(struct frame_def *self)
 {
-	return;
+	unsigned int i;
+
+	for (i = 0; i < self->fillers_len; ++i)
+		if (self->fillers[i].destroy)
+			self->fillers[i].destroy(&self->fillers[i]);
+
+	ARRAY_CLEAR(self->fillers);
 }
 
 struct traffic_def {
@@ -325,7 +348,7 @@ struct packet {
 	unsigned int len;
 };
 
-void packet_from_frame_def(struct packet *self, const struct frame_def *def)
+void packet_from_frame_def(struct packet *self, struct frame_def *def)
 {
 	unsigned int i = 0;
 	struct ethhdr *ethhdr = frame_def_begin((struct frame_def *)def);
@@ -339,6 +362,15 @@ void packet_from_frame_def(struct packet *self, const struct frame_def *def)
 	memcpy(self->addr.sll_addr, ethhdr->h_dest, sizeof ethhdr->h_dest);
 
 	memcpy(self->packet, def->packet, def->i);
+
+	for (i = 0; i < def->fillers_len; ++i) {
+		struct frame_filler *filler = &def->fillers[i];
+
+		if (!filler->fill)
+			continue;
+
+		filler->fill(filler, &self->packet[filler->offset]);
+	}
 
 	self->len = def->i;
 }
@@ -366,7 +398,6 @@ int packet_send(const struct packet *self, int fd, int ifindex)
 
 void packet_exit(struct packet *self)
 {
-	return;
 }
 
 struct generator {
@@ -400,8 +431,6 @@ static float time_since(float *time)
 static void generator_send(struct generator *self, const struct traffic_def *traffic_def)
 {
 	int ret;
-	unsigned char packet[1514];
-	unsigned char *ptr;
 	unsigned int i;
 	unsigned int j = 0;
 	struct frame_def *def = &traffic_def->frames[0];
@@ -409,15 +438,6 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 	float dt = 0.0f;
 	float throughput;
 	float delta;
-	ARRAY(struct packet, packets);
-
-	ARRAY_CLEAR(packets);
-
-	for (i = 0; i < traffic_def->frames_len; ++i) {
-		struct packet packet;
-		packet_from_frame_def(&packet, &traffic_def->frames[i]);
-		ARRAY_APPEND(packets, &packet);
-	}
 
 	if (traffic_def->count) {
 		printf("ruch: inf: sending %d frames (%d bytes)...\n",
@@ -430,17 +450,21 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 	time_since(&dt);
 
 	while (1) {
-		for (i = 0; i < packets_len; ++i) {
-			struct packet *packet = &packets[i];
+		for (i = 0; i < traffic_def->frames_len; ++i) {
+			struct packet packet;
 
-			ret = packet_send(packet, self->fd, traffic_def->ifindex);
+			packet_from_frame_def(&packet, &traffic_def->frames[i]);
+
+			ret = packet_send(&packet, self->fd, traffic_def->ifindex);
 			if (ret) {
 				perror("ruch: err: packet_send() failed");
 				break;
 			}
 			j++;
 
-			size += packet->len;
+			size += packet.len;
+
+			packet_exit(&packet);
 
 			if (traffic_def->count && j >= traffic_def->count)
 				goto finished;
@@ -454,9 +478,6 @@ finished:
 		throughput = ((float)size / delta) * 8;
 		printf("ruch: inf: achieved data rate of %f Mbps\n", throughput / 1024.0f / 1024.0f);
 	}
-
-	for (i = 0; i < packets_len; ++i)
-		packet_exit(&packets[i]);
 }
 
 static void generator_exit(struct generator *self)
@@ -835,6 +856,35 @@ static int cmd_udp(struct traffic_def *traffic_def, struct args *args)
 	return 0;
 }
 
+static uint64_t timestamp(void)
+{
+	struct timespec t;
+
+	clock_gettime(CLOCK_REALTIME, &t);
+
+	return (uint64_t)(t.tv_sec) * (uint64_t)1000000000 + (uint64_t)(t.tv_nsec);
+}
+static void timestamp_filler_fill(struct frame_filler *self, void *packet)
+{
+	uint64_t *t = packet;
+
+	*t = htobe64(timestamp());
+}
+
+static int cmd_timestamp(struct traffic_def *traffic_def, struct args *args)
+{
+	struct frame_def *def = traffic_def_frame_def_last(traffic_def);
+	struct frame_filler timestamp_filler = {
+		.offset = frame_def_size(def),
+		.size = sizeof(uint64_t),
+		.fill = timestamp_filler_fill
+	};
+
+	frame_def_filler_push(def, &timestamp_filler);
+
+	return 0;
+}
+
 static const struct {
 	const char *cmd;
 	int (*doit)(struct traffic_def *def, struct args *args);
@@ -870,6 +920,10 @@ static const struct {
 	{
 		.cmd = "udp",
 		.doit = cmd_udp
+	},
+	{
+		.cmd = "timestamp",
+		.doit = cmd_timestamp
 	}
 };
 
