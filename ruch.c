@@ -288,6 +288,7 @@ struct traffic_def {
 	ARRAY(struct frame_def, frames);
 	int ifindex;
 	unsigned int count;
+	unsigned int rate;
 };
 
 static void traffic_def_init(struct traffic_def *self)
@@ -885,6 +886,16 @@ static int cmd_timestamp(struct traffic_def *traffic_def, struct args *args)
 	return 0;
 }
 
+static int cmd_rate(struct traffic_def *def, struct args *args)
+{
+	if (1 != args_shiftf(args, "%u", &def->rate)) {
+		perror("ruch: err: can't get rate");
+		return 1;
+	}
+
+	return 0;
+}
+
 static const struct {
 	const char *cmd;
 	int (*doit)(struct traffic_def *def, struct args *args);
@@ -924,7 +935,11 @@ static const struct {
 	{
 		.cmd = "timestamp",
 		.doit = cmd_timestamp
-	}
+	},
+	{
+		.cmd = "rate",
+		.doit = cmd_rate
+	},
 };
 
 /* Calculate correct packets lengths after packet is prepared */
