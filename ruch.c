@@ -417,14 +417,14 @@ static int generator_init(struct generator *self)
 	return 0;
 }
 
-static float time_since(float *time)
+static double time_since(double *time)
 {
-	float old = *time;
+	double old = *time;
 	struct timespec t;
 
 	clock_gettime(CLOCK_MONOTONIC_RAW, &t);
 
-	*time = (float)t.tv_sec + (float)t.tv_nsec / 1000000000.0f;
+	*time = (double)t.tv_sec + (float)t.tv_nsec / 1000000000.0f;
 
 	return *time - old;
 }
@@ -436,9 +436,9 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 	unsigned int j = 0;
 	struct frame_def *def = &traffic_def->frames[0];
 	unsigned int size = 0;
-	float dt = 0.0f;
-	float throughput;
-	float delta;
+	double dt = 0.0f;
+	double throughput;
+	double delta;
 
 	if (traffic_def->count) {
 		printf("ruch: inf: sending %d frames (%d bytes)...\n",
@@ -476,7 +476,7 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 finished:
 	delta = time_since(&dt);
 	if (delta) {
-		throughput = ((float)size / delta) * 8;
+		throughput = ((double)size / delta) * 8;
 		printf("ruch: inf: achieved data rate of %f Mbps\n", throughput / 1024.0f / 1024.0f);
 	}
 }
