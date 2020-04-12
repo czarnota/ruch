@@ -349,6 +349,16 @@ struct packet {
 	unsigned int len;
 };
 
+static double packet_send_time(const struct packet *self, unsigned int rate)
+{
+	double fraction = 0.0f;
+
+	if (!rate)
+		return 0.0f;
+
+	return (double)self->len / rate;
+}
+
 void packet_from_frame_def(struct packet *self, struct frame_def *def)
 {
 	unsigned int i = 0;
