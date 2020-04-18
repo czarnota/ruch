@@ -220,6 +220,7 @@ struct frame_def {
 	unsigned char packet[1600];
 	unsigned int i;
 	ARRAY(struct frame_filler, fillers);
+	unsigned int times;
 };
 
 static void *frame_def_data(struct frame_def *self)
@@ -249,6 +250,8 @@ static void frame_def_init(struct frame_def *self)
 	random_mac_addr(ethhdr->h_source);
 
 	ethhdr->h_proto = htons(ETH_P_IP);
+
+	self->times = 1;
 }
 
 static void frame_def_push(struct frame_def *self, unsigned int size)
@@ -331,6 +334,9 @@ static unsigned int traffic_def_size_in_bytes(const struct traffic_def *self)
 static struct frame_def *
 traffic_def_frame_def_last(const struct traffic_def *self)
 {
+	if (self->frames_len <= 0)
+		return NULL;
+
 	return &self->frames[self->frames_len - 1];
 }
 
@@ -459,7 +465,7 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 	int ret;
 	unsigned int i;
 	unsigned int j = 0;
-	struct frame_def *def = &traffic_def->frames[0];
+	unsigned int k = 0;
 	unsigned int size = 0;
 	double dt = 0.0f;
 	double throughput;
@@ -482,40 +488,44 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 
 	while (1) {
 		for (i = 0; i < traffic_def->frames_len; ++i) {
-			struct packet packet;
+			struct frame_def *def = &traffic_def->frames[i];
 
-			packet_from_frame_def(&packet, &traffic_def->frames[i]);
+			for (k = 0; k < def->times; ++k) {
+				struct packet packet;
 
-			ret = packet_send(&packet, self->fd, traffic_def->ifindex);
-			if (ret) {
-				perror("ruch: err: packet_send() failed");
-				break;
-			}
-			j++;
+				packet_from_frame_def(&packet, def);
 
-			if (traffic_def->burst && traffic_def->rate) {
-				burst_budget -= packet.len;
-				if (burst_budget < 0) {
-					time_to_wait += 1.0f - time_since(&packet_time);
+				ret = packet_send(&packet, self->fd, traffic_def->ifindex);
+				if (ret) {
+					perror("ruch: err: packet_send() failed");
+					break;
+				}
+				j++;
+
+				if (traffic_def->burst && traffic_def->rate) {
+					burst_budget -= packet.len;
+					if (burst_budget < 0) {
+						time_to_wait += 1.0f - time_since(&packet_time);
+						time_wait(time_to_wait);
+						time_to_wait -= time_since(&packet_time);
+						burst_budget += traffic_def->rate / 8;
+					}
+				}
+
+				if (!traffic_def->burst && traffic_def->rate) {
+					/* Wait to achieve the specified throughput */
+					time_to_wait += packet_send_time(&packet, traffic_def->rate) - time_since(&packet_time);
 					time_wait(time_to_wait);
 					time_to_wait -= time_since(&packet_time);
-					burst_budget += traffic_def->rate / 8;
 				}
+
+				size += packet.len;
+
+				packet_exit(&packet);
+
+				if (traffic_def->count && j >= traffic_def->count)
+					goto finished;
 			}
-
-			if (!traffic_def->burst && traffic_def->rate) {
-				/* Wait to achieve the specified throughput */
-				time_to_wait += packet_send_time(&packet, traffic_def->rate) - time_since(&packet_time);
-				time_wait(time_to_wait);
-				time_to_wait -= time_since(&packet_time);
-			}
-
-			size += packet.len;
-
-			packet_exit(&packet);
-
-			if (traffic_def->count && j >= traffic_def->count)
-				goto finished;
 		}
 	}
 
@@ -949,6 +959,23 @@ static int cmd_burst(struct traffic_def *def, struct args *args)
 	return 0;
 }
 
+static int cmd_times(struct traffic_def *traffic_def, struct args *args)
+{
+	struct frame_def *def = traffic_def_frame_def_last(traffic_def);
+
+	if (!def) {
+		fprintf(stderr, "ruch: err: you need a stream");
+		return 1;
+	}
+
+	if (1 != args_shiftf(args, "%u", &def->times)) {
+		perror("ruch: err: can't get times");
+		return 1;
+	}
+
+	return 0;
+}
+
 static const struct {
 	const char *cmd;
 	int (*doit)(struct traffic_def *def, struct args *args);
@@ -996,6 +1023,10 @@ static const struct {
 	{
 		.cmd = "burst",
 		.doit = cmd_burst
+	},
+	{
+		.cmd = "times",
+		.doit = cmd_times
 	},
 };
 
