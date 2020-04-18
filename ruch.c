@@ -289,6 +289,7 @@ struct traffic_def {
 	int ifindex;
 	unsigned int count;
 	unsigned int rate;
+	int burst;
 };
 
 static void traffic_def_init(struct traffic_def *self)
@@ -465,6 +466,7 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 	double delta;
 	double time_to_wait = 0.0f;
 	double packet_time = 0.0f;
+	int burst_budget = traffic_def->rate / 8;
 
 	if (traffic_def->count) {
 		printf("ruch: inf: sending %d frames (%d bytes)...\n",
@@ -491,7 +493,17 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 			}
 			j++;
 
-			if (traffic_def->rate) {
+			if (traffic_def->burst && traffic_def->rate) {
+				burst_budget -= packet.len;
+				if (burst_budget < 0) {
+					time_to_wait += 1.0f - time_since(&packet_time);
+					time_wait(time_to_wait);
+					time_to_wait -= time_since(&packet_time);
+					burst_budget += traffic_def->rate / 8;
+				}
+			}
+
+			if (!traffic_def->burst && traffic_def->rate) {
 				/* Wait to achieve the specified throughput */
 				time_to_wait += packet_send_time(&packet, traffic_def->rate) - time_since(&packet_time);
 				time_wait(time_to_wait);
@@ -931,6 +943,12 @@ static int cmd_rate(struct traffic_def *def, struct args *args)
 	return 0;
 }
 
+static int cmd_burst(struct traffic_def *def, struct args *args)
+{
+	def->burst = 1;
+	return 0;
+}
+
 static const struct {
 	const char *cmd;
 	int (*doit)(struct traffic_def *def, struct args *args);
@@ -974,6 +992,10 @@ static const struct {
 	{
 		.cmd = "rate",
 		.doit = cmd_rate
+	},
+	{
+		.cmd = "burst",
+		.doit = cmd_burst
 	},
 };
 
