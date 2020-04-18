@@ -223,6 +223,11 @@ struct frame_def {
 	unsigned int times;
 };
 
+static unsigned int frame_def_remaining(struct frame_def *self)
+{
+	return ARRAY_SIZE(self->packet) - self->i;
+}
+
 static void *frame_def_data(struct frame_def *self)
 {
 	return &self->packet[self->i];
@@ -976,6 +981,55 @@ static int cmd_times(struct traffic_def *traffic_def, struct args *args)
 	return 0;
 }
 
+static int
+xsnprintf(char *data, unsigned int size, const char *format, ...)
+{
+	va_list args, args2;
+	int ret;
+	char one;
+
+	va_start(args, format);
+	va_copy(args2, args);
+
+	ret = vsnprintf(&one, 1, format, args);
+	va_end(args);
+
+	if (ret + 1 > size)
+		goto finish;
+
+	ret = vsnprintf(data, size, format, args2);
+
+finish:
+	va_end(args2);
+
+	return ret;
+}
+
+static int cmd_str(struct traffic_def *traffic_def, struct args *args)
+{
+	struct frame_def *def = NULL;
+	const char *str;
+	int len;
+
+	def = traffic_def_frame_def_last(traffic_def);
+
+	str = args_shift(args);
+	if (!str) {
+		fprintf(stderr, "ruch: err: expected string\n");
+		return 1;
+	}
+
+	len = xsnprintf(frame_def_data(def), frame_def_remaining(def), "%s", str);
+	if (len >= frame_def_remaining(def)) {
+		fprintf(stderr, "ruch: err: string too big\n");
+		return 1;
+	}
+
+	frame_def_push(def, len + 1);
+
+	return 0;
+}
+
 static const struct {
 	const char *cmd;
 	int (*doit)(struct traffic_def *def, struct args *args);
@@ -1027,6 +1081,10 @@ static const struct {
 	{
 		.cmd = "times",
 		.doit = cmd_times
+	},
+	{
+		.cmd = "str",
+		.doit = cmd_str
 	},
 };
 
