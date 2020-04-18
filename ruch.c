@@ -763,6 +763,29 @@ static int cmd_len(struct traffic_def *traffic_def, struct args *args)
 		return 1;
 	}
 
+	if (len < frame_def_size(def)) {
+		fprintf(stderr, "ruch: err: specified len is smaller that actual packet size\n");
+		return 1;
+	}
+
+	frame_def_push(def, len - frame_def_size(def));
+
+	return 0;
+}
+
+static int cmd_zeros(struct traffic_def *traffic_def, struct args *args)
+{
+	unsigned int len;
+	struct frame_def *def = NULL;
+
+	def = traffic_def_frame_def_last(traffic_def);
+
+	if (1 != args_shiftf(args, "%u", &len)) {
+		fprintf(stderr, "ruch: err: invalid length\n");
+		return 1;
+	}
+
+	/* TODO: Overflow!!! */
 	frame_def_push(def, len);
 
 	return 0;
@@ -1085,6 +1108,10 @@ static const struct {
 	{
 		.cmd = "str",
 		.doit = cmd_str
+	},
+	{
+		.cmd = "zeros",
+		.doit = cmd_zeros
 	},
 };
 
