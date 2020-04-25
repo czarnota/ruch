@@ -292,6 +292,7 @@ static void frame_def_exit(struct frame_def *self)
 	ARRAY_CLEAR(self->fillers);
 }
 
+#define BURST_ALL_RATE 0
 struct traffic_def {
 	ARRAY(struct frame_def, frames);
 	int ifindex;
@@ -303,6 +304,7 @@ struct traffic_def {
 static void traffic_def_init(struct traffic_def *self)
 {
 	memset(self, 0, sizeof *self);
+	self->burst = 1;
 }
 
 static void traffic_def_frame_def_add(struct traffic_def *self)
@@ -360,16 +362,6 @@ struct packet {
 	struct sockaddr_ll addr;
 	unsigned int len;
 };
-
-static double packet_send_time(const struct packet *self, unsigned int rate)
-{
-	double fraction = 0.0f;
-
-	if (!rate)
-		return 0.0f;
-
-	return (double)self->len / (rate / 8);
-}
 
 void packet_from_frame_def(struct packet *self, struct frame_def *def)
 {
@@ -477,7 +469,8 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 	double delta;
 	double time_to_wait = 0.0f;
 	double packet_time = 0.0f;
-	int burst_budget = traffic_def->rate / 8;
+	int burst_data_count = 0;
+	int burst_packets_count = 0;
 
 	if (traffic_def->count) {
 		printf("ruch: inf: sending %d frames (%d bytes)...\n",
@@ -507,21 +500,23 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 				}
 				j++;
 
-				if (traffic_def->burst && traffic_def->rate) {
-					burst_budget -= packet.len;
-					if (burst_budget < 0) {
-						time_to_wait += 1.0f - time_since(&packet_time);
+				burst_data_count += packet.len;
+				burst_packets_count += 1;
+
+				/* Burst only works now when rate is specified */
+				if (traffic_def->rate) {
+					int rate_exceeded = burst_data_count * 8 > traffic_def->rate;
+					int packets_exceeded = burst_packets_count == traffic_def->burst;
+					int packet_limited_burst = traffic_def->burst > 0;
+
+					if (packet_limited_burst && packets_exceeded || rate_exceeded) {
+						/* Wait to achieve the specified throughput */
+						time_to_wait += (double)burst_data_count / (traffic_def->rate / 8) - time_since(&packet_time);
 						time_wait(time_to_wait);
 						time_to_wait -= time_since(&packet_time);
-						burst_budget += traffic_def->rate / 8;
+						burst_data_count = 0;
+						burst_packets_count = 0;
 					}
-				}
-
-				if (!traffic_def->burst && traffic_def->rate) {
-					/* Wait to achieve the specified throughput */
-					time_to_wait += packet_send_time(&packet, traffic_def->rate) - time_since(&packet_time);
-					time_wait(time_to_wait);
-					time_to_wait -= time_since(&packet_time);
 				}
 
 				size += packet.len;
@@ -983,7 +978,18 @@ static int cmd_rate(struct traffic_def *def, struct args *args)
 
 static int cmd_burst(struct traffic_def *def, struct args *args)
 {
-	def->burst = 1;
+	int ret = args_shiftf(args, "%u", &def->burst);
+
+	if (ret < 0) {
+		def->burst = BURST_ALL_RATE;
+		return 0;
+	}
+
+	if (ret != 1) {
+		/* The burst command was passed without an argument */
+		def->burst = BURST_ALL_RATE;
+		args_unshift(args);
+	}
 	return 0;
 }
 
