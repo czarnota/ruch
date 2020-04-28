@@ -292,12 +292,14 @@ static void frame_def_exit(struct frame_def *self)
 	ARRAY_CLEAR(self->fillers);
 }
 
-#define BURST_ALL_RATE 0
 struct traffic_def {
 	ARRAY(struct frame_def, frames);
 	int ifindex;
-	unsigned int count;
+#define COUNT_FOREVER -1
+#define COUNT_EXACT -2
+	int count;
 	unsigned int rate;
+#define BURST_ALL_RATE 0
 	int burst;
 };
 
@@ -305,6 +307,7 @@ static void traffic_def_init(struct traffic_def *self)
 {
 	memset(self, 0, sizeof *self);
 	self->burst = 1;
+	self->count = COUNT_EXACT;
 }
 
 static void traffic_def_frame_def_add(struct traffic_def *self)
@@ -316,23 +319,41 @@ static void traffic_def_frame_def_add(struct traffic_def *self)
 	ARRAY_APPEND(self->frames, &frame_def);
 }
 
+static int traffic_def_count_get(const struct traffic_def *self)
+{
+	int count = 0;
+	unsigned int i = 0;
+
+	if (self->count == COUNT_FOREVER)
+		return COUNT_FOREVER;
+
+	if (self->count >= 0)
+		return self->count;
+
+	for (i = 0; i < self->frames_len; ++i)
+		count += self->frames[i].times;
+
+	return count;
+}
+
 static unsigned int traffic_def_size_in_bytes(const struct traffic_def *self)
 {
 	unsigned int size = 0;
 	unsigned int i = 0;
+	int count = traffic_def_count_get(self);
 
 	if (!self->frames_len)
 		return 0;
 
-	if (!self->count)
+	if (count <= 0)
 		return 0;
 
 	for (i = 0; i < self->frames_len; ++i)
 		size += frame_def_size(&self->frames[i]);
 
-	size *= (self->count / self->frames_len);
+	size *= count / self->frames_len;
 
-	for (i = 0; i < (self->count % self->frames_len); ++i)
+	for (i = 0; i < count % self->frames_len; ++i)
 		size += frame_def_size(&self->frames[i]);
 
 	return size;
@@ -471,16 +492,20 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 	double packet_time = 0.0f;
 	int burst_data_count = 0;
 	int burst_packets_count = 0;
+	int count = traffic_def_count_get(traffic_def);
 
-	if (traffic_def->count) {
+	if (count >= 0) {
 		printf("ruch: inf: sending %d frames (%d bytes)...\n",
-		       traffic_def->count,
+		       count,
 		       traffic_def_size_in_bytes(traffic_def));
 	} else {
 		printf("ruch: inf: sending frames...\n");
 	}
 
 	time_since(&dt);
+
+	if (count == 0)
+		goto finished;
 
 	time_since(&packet_time);
 
@@ -523,7 +548,7 @@ static void generator_send(struct generator *self, const struct traffic_def *tra
 
 				packet_exit(&packet);
 
-				if (traffic_def->count && j >= traffic_def->count)
+				if (count >= 0 && j >= count)
 					goto finished;
 			}
 		}
@@ -812,6 +837,12 @@ static int cmd_count(struct traffic_def *def, struct args *args)
 		return 1;
 	}
 
+	return 0;
+}
+
+static int cmd_forever(struct traffic_def *def, struct args *args)
+{
+	def->count = COUNT_FOREVER;
 	return 0;
 }
 
@@ -1118,6 +1149,10 @@ static const struct {
 	{
 		.cmd = "zeros",
 		.doit = cmd_zeros
+	},
+	{
+		.cmd = "forever",
+		.doit = cmd_forever
 	},
 };
 
