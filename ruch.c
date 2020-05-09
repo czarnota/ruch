@@ -1257,6 +1257,17 @@ int (*const frame_processors[])(struct frame_def *def) = {
 	process_csum
 };
 
+void print_usage(void)
+{
+	printf("ruch - simple, yet effective traffic generator\n");
+	printf("Version 0.1.0\n");
+	printf("Copyright (C) 2020 by P. Czarnota <p@czarnota.io>\n");
+	printf("Licensed under GNU GPL version 2\n");
+	printf("\n");
+	printf("Usage: ruch COMMANDS");
+	printf("\n");
+}
+
 int main(int argc, const char *const *argv)
 {
 	const char *cmd;
@@ -1269,8 +1280,10 @@ int main(int argc, const char *const *argv)
 
 	srand(time(NULL));
 
-	if (argc <= 1)
+	if (argc <= 1) {
+		print_usage();
 		return 0;
+	}
 
 	err = generator_init(&generator);
 	if (err) {
