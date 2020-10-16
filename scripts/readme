@@ -8,7 +8,7 @@ deindent 4 <<EOF
     ![ruch logo](logo.svg?raw=true)
 
     <p align="center">
-      <code>ruch</code> small and simple, yet effective traffic generator</br>
+      <code>ruch</code> is small, simple and yet effective traffic generator</br>
         <b>and it's awesome</b>
     </p>
 
