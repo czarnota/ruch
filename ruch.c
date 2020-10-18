@@ -1093,68 +1093,92 @@ static int cmd_str(struct traffic_def *traffic_def, struct args *args)
 static const struct {
 	const char *cmd;
 	int (*doit)(struct traffic_def *def, struct args *args);
+	const char *summary;
 } cmds[] = {
 	{
 		.cmd = "eth",
-		.doit = cmd_eth
-	},
-	{
-		.cmd = "len",
-		.doit = cmd_len
-	},
-	{
-		.cmd = "dev",
-		.doit = cmd_dev
-	},
-	{
-		.cmd = "count",
-		.doit = cmd_count
+		.summary = "inserts Ethernet II header",
+		.doit = cmd_eth,
 	},
 	{
 		.cmd = "vlan",
-		.doit = cmd_vlan
-	},
-	{
-		.cmd = "send",
-		.doit = cmd_send
+		.summary = "inserts VLAN header",
+		.doit = cmd_vlan,
 	},
 	{
 		.cmd = "ip",
-		.doit = cmd_ip
+		.summary = "inserts IP header",
+		.doit = cmd_ip,
 	},
 	{
 		.cmd = "udp",
-		.doit = cmd_udp
-	},
-	{
-		.cmd = "timestamp",
-		.doit = cmd_timestamp
-	},
-	{
-		.cmd = "rate",
-		.doit = cmd_rate
-	},
-	{
-		.cmd = "burst",
-		.doit = cmd_burst
-	},
-	{
-		.cmd = "times",
-		.doit = cmd_times
-	},
-	{
-		.cmd = "str",
-		.doit = cmd_str
+		.summary = "inserts UDP header",
+		.doit = cmd_udp,
 	},
 	{
 		.cmd = "zeros",
-		.doit = cmd_zeros
+		.summary = "inserts specified number of zeros",
+		.doit = cmd_zeros,
+	},
+	{
+		.cmd = "len",
+		.summary = "inserts zeros to reach specific frame length",
+		.doit = cmd_len,
+	},
+	{
+		.cmd = "timestamp",
+		.summary = "inserts a current timestamp",
+		.doit = cmd_timestamp,
+	},
+	{
+		.cmd = "str",
+		.summary = "inserts NULL terminated string into the frame",
+		.doit = cmd_str,
+	},
+	{
+		.cmd = "dev",
+		.summary = "send frames through device",
+		.doit = cmd_dev,
+	},
+	{
+		.cmd = "count",
+		.summary = "limit number of packets that the generator will send in total",
+		.doit = cmd_count,
+	},
+	{
+		.cmd = "send",
+		.summary = "",
+		.doit = cmd_send,
+	},
+	{
+		.cmd = "rate",
+		.summary = "send packets at specified rate",
+		.doit = cmd_rate,
+	},
+	{
+		.cmd = "burst",
+		.summary = "specifies how many packets generator will be sending at once",
+		.doit = cmd_burst,
+	},
+	{
+		.cmd = "times",
+		.summary = "repeats the current frame definition N times",
+		.doit = cmd_times,
 	},
 	{
 		.cmd = "forever",
-		.doit = cmd_forever
+		.summary = "generate traffic until ruch is terminated",
+		.doit = cmd_forever,
 	},
 };
+
+static void print_help(void)
+{
+	unsigned int i = 0;
+
+	for (i = 0; i < ARRAY_SIZE(cmds); ++i)
+		printf("    %-10s %s\n", cmds[i].cmd, cmds[i].summary);
+}
 
 /* Calculate correct packets lengths after packet is prepared */
 static int process_len(struct frame_def *def)
@@ -1262,9 +1286,16 @@ void print_usage(void)
 	printf("ruch - simple, yet effective traffic generator\n");
 	printf("Version 0.1.0\n");
 	printf("Copyright (C) 2020 by P. Czarnota <p@czarnota.io>\n");
-	printf("Licensed under GNU GPL version 2\n");
+	printf("Licensed under GNU GPL version 3\n");
 	printf("\n");
-	printf("Usage: ruch COMMANDS");
+	printf("Usage:\n");
+	printf("\n");
+	printf("    ruch COMMANDS");
+	printf("\n");
+	printf("\n");
+	printf("COMMANDS is one of:\n");
+	printf("\n");
+	print_help();
 	printf("\n");
 }
 

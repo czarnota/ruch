@@ -12,13 +12,28 @@ deindent 4 <<EOF
         <b>and it's also awesome</b>
     </p>
 
-    # Installation
+    # Building
 
-    tbd
+    \`\`\`console
+    $ mkdir -p build
+    $ cd build
+    $ cmake .. && cmake --build .
+    \`\`\`
+
+    The executable will be available at
+
+    \`\`\`console
+    $ build/ruch
+    \`\`\`
 
     # Usage
 
-    tbd
+    \`\`\`console
+    $ ruch
+EOF
+    build/ruch
+deindent 4 <<EOF
+    \`\`\`
 
     # License
 
