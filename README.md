@@ -2,7 +2,6 @@
 
 <p align="center">
   <code>ruch</code> is small, simple and yet effective traffic generator</br>
-    <b>and it's also awesome</b>
 </p>
 
 # Building
