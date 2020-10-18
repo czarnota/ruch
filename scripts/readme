@@ -28,6 +28,7 @@ deindent 4 <<EOF
 
     # Usage
 
+    ## Available options
     \`\`\`console
     $ ruch
 EOF

@@ -21,6 +21,7 @@ $ build/ruch
 
 # Usage
 
+## Available options
 ```console
 $ ruch
 ruch - simple, yet effective traffic generator
