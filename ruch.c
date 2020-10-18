@@ -1343,7 +1343,7 @@ int main(int argc, const char *const *argv)
 	printf("ruch: Ruch - simple, yet effective traffic generator\n");
 	printf("ruch: Version 0.1.0\n");
 	printf("ruch: Copyright (C) 2020 by P. Czarnota <p@czarnota.io>\n");
-	printf("ruch: Licensed under GNU GPL version 2\n");
+	printf("ruch: Licensed under GNU GPL version 3\n");
 	printf("ruch: inf: generator initialized\n");
 
 	traffic_def_init(&def);
