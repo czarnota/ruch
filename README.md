@@ -32,9 +32,16 @@ $ build/ruch
 
 # Usage
 
-Send 1mbit/s UDP traffic from `10.0.0.1:1234` to `10.0.0.2:4321` through `eth0_0` device
+Send 1000 UDP frames at 1mbit/s speed from `10.0.0.1:1234` to `10.0.0.2:4321` through `eth0_0` device
 ```
-ruch eth type ip ip s 10.0.0.1 d 10.0.0.2 proto udp udp s 1234 d 4321 len 1000 dev eth0_0 rate 1073741824
+$ ruch eth type ip ip s 10.0.0.1 d 10.0.0.2 proto udp udp s 1234 d 4321 len 1000 dev eth0_0 rate 1073741824 count 1000
+ruch: Ruch - simple, yet effective traffic generator
+ruch: Version 0.1.0
+ruch: Copyright (C) 2020 by P. Czarnota <p@czarnota.io>
+ruch: Licensed under GNU GPL version 2
+ruch: inf: generator initialized
+ruch: inf: sending 1000 frames (1000000 bytes)...
+ruch: inf: achieved data rate of 0.999985 Mbps
 ```
 
 ## Available options
