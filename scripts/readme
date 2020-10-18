@@ -40,6 +40,11 @@ deindent 4 <<EOF
 
     # Usage
 
+    Send 1mbit/s UDP traffic from \`10.0.0.1:1234\` to \`10.0.0.2:4321\` through \`eth0_0\` device
+    \`\`\`
+    ruch eth type ip ip s 10.0.0.1 d 10.0.0.2 proto udp udp s 1234 d 4321 len 1000 dev eth0_0 rate $((1024 * 1024 * 1024))
+    \`\`\`
+
     ## Available options
     \`\`\`console
     $ ruch

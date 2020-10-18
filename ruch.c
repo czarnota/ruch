@@ -890,6 +890,24 @@ static int cmd_ip(struct traffic_def *traffic_def, struct args *args)
 			continue;
 		}
 
+		if (strcmp(arg, "s") == 0) {
+			arg = args_shift(args);
+			if (!arg)
+				break;
+
+			inet_pton(AF_INET, arg, &iphdr->saddr);
+			continue;
+		}
+
+		if (strcmp(arg, "d") == 0) {
+			arg = args_shift(args);
+			if (!arg)
+				break;
+
+			inet_pton(AF_INET, arg, &iphdr->daddr);
+			continue;
+		}
+
 		if (strcmp(arg, "proto") == 0) {
 			int proto;
 			int ret;
