@@ -7,6 +7,18 @@
 
 # Building
 
+## Quick and fast with gcc
+
+`ruch` has no dependencies and it is a single .c file.
+You can simply build it using gcc
+```
+$ gcc ruch.c -o ruch
+```
+
+## CMake
+
+You can also build it using [cmake](https://cmake.org).
+
 ```console
 $ mkdir -p build
 $ cd build
