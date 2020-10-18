@@ -38,7 +38,7 @@ $ ruch eth type ip ip s 10.0.0.1 d 10.0.0.2 proto udp udp s 1234 d 4321 len 1000
 ruch: Ruch - simple, yet effective traffic generator
 ruch: Version 0.1.0
 ruch: Copyright (C) 2020 by P. Czarnota <p@czarnota.io>
-ruch: Licensed under GNU GPL version 2
+ruch: Licensed under GNU GPL version 3
 ruch: inf: generator initialized
 ruch: inf: sending 1000 frames (1000000 bytes)...
 ruch: inf: achieved data rate of 0.999985 Mbps
